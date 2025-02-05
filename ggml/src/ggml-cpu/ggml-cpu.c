@@ -1297,7 +1297,11 @@ struct ggml_threadpool {
     atomic_int n_graph;       // incremented when there is work to be done (i.e each graph)
     atomic_int GGML_CACHE_ALIGN n_barrier;
     atomic_int GGML_CACHE_ALIGN n_barrier_passed;
-    atomic_int current_chunk; // currently processing chunk during Mat_Mul, shared between all the threads.
+    atomic_int GGML_CACHE_ALIGN current_chunk; // currently processing chunk during Mat_Mul, shared between all the threads.
+
+    // store each counter in a separate cache line
+    char GGML_CACHE_ALIGN current_chunks[256][GGML_CACHE_LINE];
+    //atomic_int GGML_CACHE_ALIGN current_chunks[256];
 
     // these are atomic as an annotation for thread-sanitizer
     atomic_bool stop;         // Used for stopping the threadpool altogether
@@ -7744,7 +7748,8 @@ static void ggml_compute_forward_mul_mat_id(
 
     if (ith == 0) {
         // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
-        atomic_store_explicit(&params->threadpool->current_chunk, nth, memory_order_relaxed);
+        //atomic_store_explicit(&params->threadpool->current_chunk, nth, memory_order_relaxed);
+        //memset(params->threadpool->current_chunks, 0, n_as*sizeof(params->threadpool->current_chunks[0]));
 
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
@@ -7760,12 +7765,18 @@ static void ggml_compute_forward_mul_mat_id(
                 matrix_row_counts[i02] += 1;
             }
         }
+    } else {
+        // reset current_chunk
+        for (int cur_a = ith - 1; cur_a < n_as; cur_a += (nth - 1)) {
+            atomic_int * current_chunk_ctr = (atomic_int *)(params->threadpool->current_chunks + cur_a);
+            atomic_store_explicit(current_chunk_ctr, nth, memory_order_relaxed);
+        }
     }
 
     ggml_barrier(params->threadpool);
 
-    const int64_t rows_total = ggml_nelements(ids);
-    int64_t rows_processed = 0;
+    //const int64_t rows_total = ggml_nelements(ids);
+    //int64_t rows_processed = 0;
 
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
@@ -7774,7 +7785,7 @@ static void ggml_compute_forward_mul_mat_id(
             continue;
         }
 
-        rows_processed += cne1;
+        //rows_processed += cne1;
 
         const char * src0_cur = (const char *) src0->data + cur_a * nb02;
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
@@ -7801,6 +7812,8 @@ static void ggml_compute_forward_mul_mat_id(
 
         int current_chunk = ith;
 
+        atomic_int * current_chunk_ctr = (atomic_int *)(params->threadpool->current_chunks + cur_a);
+
         while (current_chunk < nchunk0 * nchunk1) {
             const int64_t ith0 = current_chunk % nchunk0;
             const int64_t ith1 = current_chunk / nchunk0;
@@ -7821,21 +7834,21 @@ static void ggml_compute_forward_mul_mat_id(
                 break;
             }
 
-            current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
+            current_chunk = atomic_fetch_add_explicit(current_chunk_ctr, 1, memory_order_relaxed);
         }
 
-        if (rows_processed == rows_total) {
-            break;
-        }
+        //if (rows_processed == rows_total) {
+        //    break;
+        //}
 
-        ggml_barrier(params->threadpool);
+        //ggml_barrier(params->threadpool);
 
-        if (ith == 0) {
-            // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
-            atomic_store_explicit(&params->threadpool->current_chunk, nth, memory_order_relaxed);
-        }
+        //if (ith == 0) {
+        //    // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
+        //    atomic_store_explicit(&params->threadpool->current_chunk, nth, memory_order_relaxed);
+        //}
 
-        ggml_barrier(params->threadpool);
+        //ggml_barrier(params->threadpool);
     }
 }
 
@@ -14079,6 +14092,7 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->n_barrier        = 0;
         threadpool->n_barrier_passed = 0;
         threadpool->current_chunk    = 0;
+        memset(threadpool->current_chunks, 0, sizeof(threadpool->current_chunks));
         threadpool->stop             = false;
         threadpool->pause            = tpp->paused;
         threadpool->abort            = -1;
@@ -14160,6 +14174,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         threadpool->cgraph           = cgraph;
         threadpool->cplan            = cplan;
         threadpool->current_chunk    = 0;
+        memset(threadpool->current_chunks, 0, sizeof(threadpool->current_chunks));
         threadpool->abort            = -1;
         threadpool->ec               = GGML_STATUS_SUCCESS;
     }
