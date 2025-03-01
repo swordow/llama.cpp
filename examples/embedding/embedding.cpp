@@ -138,7 +138,7 @@ int main(int argc, char ** argv) {
     // tokenize the prompts and trim
     std::vector<std::vector<int32_t>> inputs;
     for (const auto & prompt : prompts) {
-        auto inp = common_tokenize(ctx, prompt, true, true);
+        auto inp = common_tokenize(ctx, prompt, false/*dont add special leongyi*/, true);
         if (inp.size() > n_batch) {
             LOG_ERR("%s: number of tokens in input line (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
                     __func__, (long long int) inp.size(), (long long int) n_batch);
@@ -220,21 +220,21 @@ int main(int argc, char ** argv) {
         if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
             for (int j = 0; j < n_embd_count; j++) {
                 LOG("embedding %d: [", j);
-                for (int i = 0; i < n_embd; i++) {
+                for (int i = 0; i < 3; i++) {
                     if (params.embd_normalize == 0) {
                         LOG("%6.0f ", emb[j * n_embd + i]);
                     } else {
                         LOG("%9.6f ", emb[j * n_embd + i]);
                     }
                 }
-                //LOG(" ... ");
-                //for (int i = n_embd - 3; i < n_embd; i++) {
-                //    if (params.embd_normalize == 0) {
-                //        LOG("%6.0f ", emb[j * n_embd + i]);
-                //    } else {
-                //        LOG("%9.6f ", emb[j * n_embd + i]);
-                //    }
-                //}
+                LOG(" ... ");
+                for (int i = n_embd - 3; i < n_embd; i++) {
+                    if (params.embd_normalize == 0) {
+                        LOG("%6.0f ", emb[j * n_embd + i]);
+                    } else {
+                        LOG("%9.6f ", emb[j * n_embd + i]);
+                    }
+                }
                 LOG("]\n");
             }
         } else if (pooling_type == LLAMA_POOLING_TYPE_RANK) {
