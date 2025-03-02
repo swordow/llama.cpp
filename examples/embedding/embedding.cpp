@@ -332,15 +332,23 @@ int main(int argc, char ** argv) {
         } else {
             // print the first part of the embeddings or for a single prompt, the full embedding
             for (int j = 0; j < n_prompts; j++) {
-                LOG("embedding %d: ", j);
-                for (int i = 0; i < (n_prompts > 1 ? std::min(16, n_embd_out) : n_embd_out); i++) {
+                LOG("embedding %d: [", j);
+                for (int i = 0; i < 3; i++) {
                     if (params.embd_normalize == 0) {
                         LOG("%6.0f ", emb[j * n_embd_out + i]);
                     } else {
                         LOG("%9.6f ", emb[j * n_embd_out + i]);
                     }
                 }
-                LOG("\n");
+                LOG(" ... ");
+                for (int i = n_embd - 3; i < n_embd; i++) {
+                    if (params.embd_normalize == 0) {
+                        LOG("%6.0f ", emb[j * n_embd + i]);
+                    } else {
+                        LOG("%9.6f ", emb[j * n_embd + i]);
+                    }
+                }
+                LOG("]\n");
             }
 
             // print cosine similarity matrix
