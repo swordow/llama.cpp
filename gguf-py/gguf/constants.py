@@ -1616,6 +1616,7 @@ class PoolingType(IntEnum):
     NONE = 0
     MEAN = 1
     CLS  = 2
+    LAST = 3
 
 
 class GGMLQuantizationType(IntEnum):
