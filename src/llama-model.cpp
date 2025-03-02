@@ -419,6 +419,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_BLOCK_COUNT,       hparams.n_layer);
     ml.get_key(LLM_KV_EXPERT_COUNT,      hparams.n_expert,      false);
     ml.get_key(LLM_KV_EXPERT_USED_COUNT, hparams.n_expert_used, false);
+    ml.get_key(LLM_KV_POOLING_TYPE,      hparams.pooling_type,  false);
 
     if (arch == LLM_ARCH_WAVTOKENIZER_DEC) {
         ml.get_key(LLM_KV_FEATURES_LENGTH, hparams.n_embd_features);
