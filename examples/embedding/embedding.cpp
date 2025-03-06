@@ -2,6 +2,9 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#if LLAMA_SHARED && LLAMA_EMBEDDING_SHARED
+#include "embedding.h"
+#endif
 
 #include <clocale>
 #include <ctime>
@@ -10,6 +13,7 @@
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
+
 
 static std::vector<std::string> split_lines(const std::string & s, const std::string & separator = "\n") {
     std::vector<std::string> lines;
@@ -34,16 +38,26 @@ static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & toke
     }
 }
 
-static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd_out, int embd_norm) {
+bool llama_batch_decode(struct llama_context * ctx, llama_batch batch, int n_seq, int n_embd, int embd_norm, float * output) {
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
-
+    const struct llama_model * model = llama_get_model(ctx);
     // clear previous kv_cache values (irrelevant for embeddings)
     llama_memory_clear(llama_get_memory(ctx), true);
 
     // run model
     LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
-    if (llama_decode(ctx, batch) < 0) {
-        LOG_ERR("%s : failed to process\n", __func__);
+    if (llama_model_has_encoder(model) && !llama_model_has_decoder(model)) {
+        // encoder-only model
+        if (llama_encode(ctx, batch) < 0) {
+            LOG_ERR("%s : failed to encode\n", __func__);
+            return false;
+        }
+    } else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
+        // decoder-only model
+        if (llama_decode(ctx, batch) < 0) {
+            LOG_ERR("%s : failed to decode\n", __func__);
+            return false;
+        }
     }
 
     for (int i = 0; i < batch.n_tokens; i++) {
@@ -66,9 +80,10 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
             GGML_ASSERT(embd != NULL && "failed to get sequence embeddings");
         }
 
-        float * out = output + embd_pos * n_embd_out;
-        common_embd_normalize(embd, out, n_embd_out, embd_norm);
+        float * out = output + embd_pos * n_embd;
+        common_embd_normalize(embd, out, n_embd, embd_norm);
     }
+    return true;
 }
 
 // plain, pipe-friendly output: one embedding per line
@@ -94,6 +109,7 @@ static void print_raw_embeddings(const float * emb,
     }
 }
 
+#if !LLAMA_EMBEDDING_SHARED
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -255,8 +271,8 @@ int main(int argc, char ** argv) {
     }
 
     // allocate output
-    const int n_embd_out = llama_model_n_embd_out(model);
-    std::vector<float> embeddings(n_embd_count * n_embd_out, 0);
+    const int n_embd = llama_model_n_embd(model);
+    std::vector<float> embeddings(n_embd_count * n_embd, 0);
     float * emb = embeddings.data();
 
     // break into batches
@@ -270,8 +286,8 @@ int main(int argc, char ** argv) {
 
         // encode if at capacity
         if (batch.n_tokens + n_toks > n_batch || s >= n_seq_max) {
-            float * out = emb + e * n_embd_out;
-            batch_decode(ctx, batch, out, s, n_embd_out, params.embd_normalize);
+            float * out = emb + e * n_embd;
+            llama_batch_decode(ctx, batch, s, n_embd, params.embd_normalize, out);
             e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
             s = 0;
             common_batch_clear(batch);
@@ -283,8 +299,8 @@ int main(int argc, char ** argv) {
     }
 
     // final batch
-    float * out = emb + e * n_embd_out;
-    batch_decode(ctx, batch, out, s, n_embd_out, params.embd_normalize);
+    float * out = emb + e * n_embd;
+    llama_batch_decode(ctx, batch, s, n_embd, params.embd_normalize, out);
 
     if (params.embd_out.empty()) {
         LOG("\n");
@@ -302,9 +318,9 @@ int main(int argc, char ** argv) {
                 LOG(" ... ");
                 for (int i = n_embd - 3; i < n_embd; i++) {
                     if (params.embd_normalize == 0) {
-                        LOG("%6.0f ", emb[j * n_embd_out + i]);
+                        LOG("%6.0f ", emb[j * n_embd + i]);
                     } else {
-                        LOG("%9.6f ", emb[j * n_embd_out + i]);
+                        LOG("%9.6f ", emb[j * n_embd + i]);
                     }
                 }
                 LOG("]\n");
@@ -323,9 +339,9 @@ int main(int argc, char ** argv) {
                 for (uint32_t i = 0; i < n_cls_out; i++) {
                     // NOTE: if you change this log - update the tests in ci/run.sh
                     if (n_cls_out == 1) {
-                        LOG("rerank score %d: %8.3f\n", j, emb[j * n_embd_out]);
+                        LOG("rerank score %d: %8.3f\n", j, emb[j * n_embd]);
                     } else {
-                        LOG("rerank score %d: %8.3f [%s]\n", j, emb[j * n_embd_out + i], cls_out_labels[i].c_str());
+                        LOG("rerank score %d: %8.3f [%s]\n", j, emb[j * n_embd + i], cls_out_labels[i].c_str());
                     }
                 }
             }
@@ -335,9 +351,9 @@ int main(int argc, char ** argv) {
                 LOG("embedding %d: [", j);
                 for (int i = 0; i < 3; i++) {
                     if (params.embd_normalize == 0) {
-                        LOG("%6.0f ", emb[j * n_embd_out + i]);
+                        LOG("%6.0f ", emb[j * n_embd + i]);
                     } else {
-                        LOG("%9.6f ", emb[j * n_embd_out + i]);
+                        LOG("%9.6f ", emb[j * n_embd + i]);
                     }
                 }
                 LOG(" ... ");
@@ -361,7 +377,7 @@ int main(int argc, char ** argv) {
                 LOG("\n");
                 for (int i = 0; i < n_prompts; i++) {
                     for (int j = 0; j < n_prompts; j++) {
-                        float sim = common_embd_similarity_cos(emb + i * n_embd_out, emb + j * n_embd_out, n_embd_out);
+                        float sim = common_embd_similarity_cos(emb + i * n_embd, emb + j * n_embd, n_embd);
                         LOG("%6.2f ", sim);
                     }
                     LOG("%1.10s", prompts[i].c_str());
@@ -379,9 +395,9 @@ int main(int argc, char ** argv) {
             if (notArray) LOG("    {\n      \"object\": \"embedding\",\n      \"index\": %d,\n      \"embedding\": ",j);
             LOG("[");
             for (int i = 0;;) { // at least one iteration (n_embd > 0)
-                LOG(params.embd_normalize == 0 ? "%1.0f" : "%1.7f", emb[j * n_embd_out + i]);
+                LOG(params.embd_normalize == 0 ? "%1.0f" : "%1.7f", emb[j * n_embd + i]);
                 i++;
-                if (i < n_embd_out) LOG(","); else break;
+                if (i < n_embd) LOG(","); else break;
             }
             LOG(notArray ? "]\n    }" : "]");
             j++;
@@ -394,7 +410,7 @@ int main(int argc, char ** argv) {
             for (int i = 0;;) { // at least two iteration (n_embd_count > 1)
                 LOG("    [");
                 for (int j = 0;;) { // at least two iteration (n_embd_count > 1)
-                    float sim = common_embd_similarity_cos(emb + i * n_embd_out, emb + j * n_embd_out, n_embd_out);
+                    float sim = common_embd_similarity_cos(emb + i * n_embd, emb + j * n_embd, n_embd);
                     LOG("%6.2f", sim);
                     j++;
                     if (j < n_embd_count) LOG(", "); else break;
@@ -408,7 +424,7 @@ int main(int argc, char ** argv) {
 
         if (notArray) LOG("\n}\n");
     } else if (params.embd_out == "raw") {
-        print_raw_embeddings(emb, n_embd_count, n_embd_out, model, pooling_type, params.embd_normalize);
+        print_raw_embeddings(emb, n_embd_count, n_embd, model, pooling_type, params.embd_normalize);
     }
 
     LOG("\n");
@@ -420,3 +436,4 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
+#endif

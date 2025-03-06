@@ -1,3 +1,5 @@
+#include "common.h"
+#include "llama-impl.h"
 #include "llama-batch.h"
 
 #include "llama-impl.h"
