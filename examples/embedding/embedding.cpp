@@ -2,13 +2,16 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
-
+#if LLAMA_SHARED && LLAMA_EMBEDDING_SHARED
+#include "embedding.h"
+#endif
 #include <ctime>
 #include <algorithm>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
+
 
 static std::vector<std::string> split_lines(const std::string & s, const std::string & separator = "\n") {
     std::vector<std::string> lines;
@@ -33,10 +36,9 @@ static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & toke
     }
 }
 
-static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd, int embd_norm) {
+bool llama_batch_decode(struct llama_context * ctx, llama_batch batch, int n_seq, int n_embd, int embd_norm, float * output) {
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
     const struct llama_model * model = llama_get_model(ctx);
-
     // clear previous kv_cache values (irrelevant for embeddings)
     llama_kv_self_clear(ctx);
 
@@ -46,11 +48,13 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         // encoder-only model
         if (llama_encode(ctx, batch) < 0) {
             LOG_ERR("%s : failed to encode\n", __func__);
+            return false;
         }
     } else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
         // decoder-only model
         if (llama_decode(ctx, batch) < 0) {
             LOG_ERR("%s : failed to decode\n", __func__);
+            return false;
         }
     }
 
@@ -77,8 +81,10 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         float * out = output + embd_pos * n_embd;
         common_embd_normalize(embd, out, n_embd, embd_norm);
     }
+    return true;
 }
 
+#if !LLAMA_EMBEDDING_SHARED
 int main(int argc, char ** argv) {
     common_params params;
 
@@ -200,7 +206,7 @@ int main(int argc, char ** argv) {
         // encode if at capacity
         if (batch.n_tokens + n_toks > n_batch) {
             float * out = emb + e * n_embd;
-            batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
+            llama_batch_decode(ctx, batch, s, n_embd, params.embd_normalize, out);
             e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
             s = 0;
             common_batch_clear(batch);
@@ -213,7 +219,7 @@ int main(int argc, char ** argv) {
 
     // final batch
     float * out = emb + e * n_embd;
-    batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
+    llama_batch_decode(ctx, batch, s, n_embd, params.embd_normalize, out);
 
     if (params.embd_out.empty()) {
         LOG("\n");
@@ -332,3 +338,4 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
+#endif
