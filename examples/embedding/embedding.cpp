@@ -49,13 +49,16 @@ bool llama_batch_decode(struct llama_context * ctx, llama_batch batch, int n_seq
     if (llama_model_has_encoder(model) && !llama_model_has_decoder(model)) {
         // encoder-only model
         if (llama_encode(ctx, batch) < 0) {
-            LOG_ERR("%s : failed to encode\n", __func__);
+            LOG_ERR("%s : failed to encode (n_tokens=%d, n_seq=%d)\n", __func__, batch.n_tokens, n_seq);
             return false;
         }
     } else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
         // decoder-only model
-        if (llama_decode(ctx, batch) < 0) {
-            LOG_ERR("%s : failed to decode\n", __func__);
+        int ret = llama_decode(ctx, batch);
+        if (ret < 0) {
+            LOG_ERR("%s : failed to decode (ret=%d, n_tokens=%d, n_seq=%d). "
+                    "If n_seq > 1, ensure context was created with n_seq_max >= n_seq.\n",
+                    __func__, ret, batch.n_tokens, n_seq);
             return false;
         }
     }
