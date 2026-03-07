@@ -34,11 +34,13 @@ add_library(mtmd
             models/youtuvl.cpp
             )
 
-set_target_properties(mtmd PROPERTIES
-    VERSION ${LLAMA_INSTALL_VERSION}
-    SOVERSION 0
-    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
-)
+if(LLAMA_INSTALL_VERSION)
+    set_target_properties(mtmd PROPERTIES
+        VERSION ${LLAMA_INSTALL_VERSION}
+        SOVERSION 0
+        MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
+    )
+endif()
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads)
